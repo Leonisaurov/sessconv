@@ -115,6 +115,12 @@ Part = { type: "text", text }
 | CodeBuddy | `~/.codebuddy/projects/<slug>/<id>.jsonl` | JSONL propio |
 | OpenCode | `~/.local/share/opencode/opencode.db` | CLI `session export/import` (no se toca SQLite) |
 
+Al importar en OpenCode se genera un `info.id` nuevo (`ses_…`), IDs de mensaje
+`msg_…` y un `projectID` no vacío; OpenCode resuelve el proyecto real a partir
+de `--directory`. Los `tool_result` de Qoder/CodeBuddy se incrustan en el
+`tool_call` correspondiente, y los fallos usan el objeto `state.error` que
+valida OpenCode.
+
 ### Mapeo de herramientas
 
 | Semántica | Qoder / CodeBuddy | OpenCode |
@@ -137,6 +143,21 @@ Las herramientas sin mapeo se conservan tal cual.
   `UPDATE` ni `DELETE` sobre su base de datos.
 - `--dry-run` escribe el resultado en stdout para revisarlo antes.
 
+## Estado verificado
+
+Probado sin llamar al modelo (2026-11-08, OpenCode v2.2.6):
+
+| Conversión | Resultado |
+|---|---|
+| Qoder → CodeBuddy (roundtrip) | 626/626 `parts` |
+| CodeBuddy → Qoder (roundtrip) | 333/333 `parts` |
+| Qoder → OpenCode (import real) → Qoder | 467 mensajes, 626/626 `parts` |
+| OpenCode → CodeBuddy (archivo) → OpenCode (import real) | 626/626 `parts` |
+| `selftest` | OK en los tres formatos |
+
+Las sesiones de prueba se marcaron con `SESSCONV-TEST` y se eliminaron al
+terminar.
+
 ## Limitaciones
 
 - Las imágenes se representan como texto placeholder (`[imagen omitida]` o la
@@ -144,6 +165,9 @@ Las herramientas sin mapeo se conservan tal cual.
 - La fidelidad se mide por tipos de `parts` (texto, razonamiento, tool calls y
   resultados), no por número de mensajes: Qoder y CodeBuddy separan en varias
   líneas lo que OpenCode guarda en un solo mensaje.
+- `roundtrip` comprueba Qoder y CodeBuddy en memoria. Para OpenCode hay que usar
+  `convert` (import real) y verificar con `inspect`; así se evita escribir en la
+  base de datos durante una comprobación rápida.
 - Los formatos no son APIs públicas y pueden cambiar. Si una versión nueva de
   cualquiera de los tres CLIs rompe la conversión, hay que ajustar su adaptador.
 

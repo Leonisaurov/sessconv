@@ -134,3 +134,16 @@ reenvían bytes binarios entre herramientas. Esto es aceptable para "retomar la 
 - Si `codebuddy -r` no descubre sesiones solo por el `.jsonl`, habrá que localizar el índice que
   usa (posible `history.jsonl` o escaneo de dir) e implementar la escritura mínima equivalente;
   el test del paso 2b lo detecta antes de dar por bueno.
+
+## Notas de implementación (verificado 2026-11-08, OpenCode v2.2.6)
+
+- `opencode session import` exige `info.id` con formato `ses_…`, un `projectID` no vacío
+  y IDs de mensaje `msg_…`. El proyecto real se resuelve/crea a partir de `--directory`.
+- Los `tool_result` que Qoder/CodeBuddy guardan en mensajes de usuario deben incrustarse
+  en el `tool_call` del assistant anterior (`state.content`).
+- En import, `state.status` acepta `running` y `completed`; un fallo debe usar
+  `state.error = {type, message}` en lugar de `content`/`metadata`.
+- Al leer un export de OpenCode, el rol se toma del campo `type` del mensaje; no se debe
+  inferir por la presencia de tool calls.
+- `sessconv selftest` valida el esquema básico; la prueba real de import se hace con
+  `convert` y se verifica con `inspect`.

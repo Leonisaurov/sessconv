@@ -18,8 +18,8 @@ Uso:
 """
 
 import argparse
-import base64
 import glob
+import hashlib
 import json
 import os
 import re
@@ -36,8 +36,6 @@ TOOLS = ("qoder", "codebuddy", "opencode")
 HOME = os.path.expanduser("~")
 QODER_ROOT = os.path.join(HOME, ".qoder", "projects")
 CODEBUDDY_ROOT = os.path.join(HOME, ".codebuddy", "projects")
-
-TEST_TITLE_PREFIX = "SESSCONV-TEST"
 
 
 # --------------------------------------------------------------------------
@@ -489,7 +487,7 @@ def read_opencode(ref, cwd=None):
         if mt == "user":
             txt = m.get("text", "")
             if txt:
-                messages.append((info.get("location", {}).get("directory"), ts, [p_text(txt)]))
+                messages.append(("user", info.get("location", {}).get("directory"), ts, [p_text(txt)]))
         elif mt == "assistant":
             parts = []
             for c in m.get("content", []):
@@ -505,22 +503,21 @@ def read_opencode(ref, cwd=None):
                     st = c.get("state") or {}
                     content = st.get("content") or []
                     out_txt = "\n".join(x.get("text", "") for x in content if isinstance(x, dict))
+                    if st.get("status") == "error":
+                        err = st.get("error") or {}
+                        out_txt = err.get("message", "") or out_txt
                     if out_txt or st.get("status") == "error":
                         parts.append(p_tool_result(c.get("id"), name, out_txt,
                                                   is_error=(st.get("status") == "error")))
             if parts:
-                messages.append((info.get("location", {}).get("directory"), ts, parts))
+                messages.append(("assistant", info.get("location", {}).get("directory"), ts, parts))
     sess = make_session(info.get("location", {}).get("directory") or os.getcwd(),
                         info.get("title"))
     model = (info.get("model") or {}).get("id")
     sess["model"] = model
     sess["created_at"] = (info.get("time") or {}).get("created") or sess["created_at"]
     sess["updated_at"] = (info.get("time") or {}).get("updated") or sess["updated_at"]
-    for c, ts, parts in messages:
-        if any(p["type"] == "tool_call" for p in parts):
-            role = "assistant"
-        else:
-            role = "user"
+    for role, c, ts, parts in messages:
         add_message(sess, role, ts, parts)
     sess["id"] = info.get("id") or ref
     return sess
@@ -726,16 +723,52 @@ def write_codebuddy(sess, cwd, out_path=None, dry_run=False):
 # ESCRITURA: OpenCode (vía CLI import)
 # --------------------------------------------------------------------------
 
-def build_opencode_export(sess):
+def _opencode_msg_id():
+    # OpenCode usa ids con prefijo msg_ + base62.
+    return "msg_" + "".join(secrets.choice(_B62) for _ in range(26))
+
+
+def _attach_tool_result(tool_parts, part, ts):
+    """Incrusta un tool_result en el tool_call correspondiente (OpenCode los une)."""
+    c = tool_parts.get(part["call_id"])
+    if c is None:
+        return False
+    if part["is_error"]:
+        # OpenCode valida un objeto `error` distinto para los fallos.
+        c["state"]["status"] = "error"
+        c["state"].pop("content", None)
+        c["state"].pop("metadata", None)
+        c["state"]["error"] = {"type": "tool.execution",
+                               "message": part["output"] or "tool failed"}
+    else:
+        c["state"]["status"] = "completed"
+        c["state"]["content"] = (
+            [{"type": "text", "text": part["output"]}] if part["output"] else [])
+        c["state"]["metadata"] = {"status": "completed", "truncated": False,
+                                  "exit": 0}
+    c["time"]["completed"] = ts
+    return True
+
+
+def build_opencode_export(sess, cwd=None):
     messages = []
+    tool_parts = {}
+    target_cwd = cwd or sess["cwd"] or os.getcwd()
     for msg in sess["messages"]:
         role = msg["role"]
         ts = msg["timestamp"]
         if role == "user":
+            # Los tool_result de Qoder/CodeBuddy llegan en mensajes de usuario:
+            # se incrustan en el tool_call del assistant anterior.
+            for p in msg["parts"]:
+                if p["type"] == "tool_result":
+                    _attach_tool_result(tool_parts, p, ts)
             texts = [p["text"] for p in msg["parts"] if p["type"] == "text"]
-            txt = "\n".join(texts)
-            messages.append({"id": new_msg_id(), "time": {"created": ts},
-                             "text": txt, "files": [], "agents": [], "type": "user"})
+            if not texts:
+                continue
+            messages.append({"id": _opencode_msg_id(), "time": {"created": ts},
+                             "text": "\n".join(texts), "files": [], "agents": [],
+                             "type": "user"})
         else:  # assistant
             content = []
             for p in msg["parts"]:
@@ -746,22 +779,20 @@ def build_opencode_export(sess):
                 elif p["type"] == "text":
                     content.append({"type": "text", "text": p["text"]})
                 elif p["type"] == "tool_call":
-                    content.append({"type": "tool", "id": p["id"], "name": to_opencode_tool_name(p["name"]),
-                                    "executed": False,
-                                    "state": {"status": "completed",
-                                              "input": opencode_args(p["name"], p["args"]),
-                                              "content": []},
-                                    "time": {"created": ts}})
+                    c = {"type": "tool", "id": p["id"],
+                         "name": to_opencode_tool_name(p["name"]),
+                         "executed": False,
+                         "state": {"status": "completed",
+                                   "input": opencode_args(p["name"], p["args"]),
+                                   "content": []},
+                         "time": {"created": ts, "ran": ts, "completed": ts}}
+                    content.append(c)
+                    tool_parts[p["id"]] = c
                 elif p["type"] == "tool_result":
-                    # incrustar el resultado en el tool con el mismo id
-                    for c in content:
-                        if c.get("type") == "tool" and c.get("id") == p["call_id"]:
-                            c["state"]["status"] = "error" if p["is_error"] else "completed"
-                            c["state"]["content"] = [{"type": "text", "text": p["output"]}]
-                            c["state"]["metadata"] = {"status": c["state"]["status"],
-                                                      "truncated": False, "exit": 0}
-                            break
-            messages.append({"id": new_msg_id(), "time": {"created": ts, "completed": ts},
+                    _attach_tool_result(tool_parts, p, ts)
+            if not content:
+                continue
+            messages.append({"id": _opencode_msg_id(), "time": {"created": ts, "completed": ts},
                              "type": "assistant", "agent": "build",
                              "model": {"id": sess["model"] or "qfmodel",
                                        "providerID": "opencode-go"},
@@ -770,7 +801,10 @@ def build_opencode_export(sess):
                                                     "cache": {"read": 0, "write": 0}}})
     export = {
         "info": {
-            "projectID": None,
+            # OpenCode exige un id nuevo y un projectID no vacío; al importar
+            # con --directory resuelve/crea el proyecto real del directorio.
+            "id": new_id_opencode(),
+            "projectID": hashlib.sha1(target_cwd.encode("utf-8")).hexdigest(),
             "agent": "build",
             "model": {"id": sess["model"] or "qfmodel", "providerID": "opencode-go"},
             "cost": 0,
@@ -779,7 +813,7 @@ def build_opencode_export(sess):
             "outcome": "succeeded",
             "time": {"created": sess["created_at"], "updated": sess["updated_at"]},
             "title": sess["title"],
-            "location": {"directory": sess["cwd"] or os.getcwd()},
+            "location": {"directory": target_cwd},
         },
         "messages": messages,
     }
@@ -788,7 +822,7 @@ def build_opencode_export(sess):
 
 def write_opencode(sess, cwd, dry_run=False):
     target_cwd = cwd or sess["cwd"] or os.getcwd()
-    export = build_opencode_export(sess)
+    export = build_opencode_export(sess, target_cwd)
     if dry_run:
         sys.stdout.write(json.dumps(export, ensure_ascii=False, indent=2))
         return None, None
@@ -931,8 +965,10 @@ def cmd_convert(args):
         # id opencode: ok
         pass
     sess = read_session(from_tool, args.ref, args.cwd)
-    title = args.title or (TEST_TITLE_PREFIX + " " + (sess["title"] or "imported"))
-    sess["title"] = title
+    if args.title:
+        sess["title"] = args.title
+    elif not sess["title"]:
+        sess["title"] = "imported"
     if args.cwd:
         sess["cwd"] = args.cwd
     path, new_id = write_session(args.to_tool, sess, args.cwd, dry_run=args.dry_run)
@@ -1032,7 +1068,12 @@ def cmd_selftest(args):
         print(f"  {via}: orig={op} reread={np_} -> {status}")
     # opencode build validity
     exp = build_opencode_export(sess)
-    ok = all("type" in m and ("content" in m or "text" in m) for m in exp["messages"])
+    ok = (
+        exp["info"]["id"].startswith("ses_")
+        and bool(exp["info"].get("projectID"))
+        and all(m["id"].startswith("msg_") for m in exp["messages"])
+        and all("type" in m and ("content" in m or "text" in m) for m in exp["messages"])
+    )
     print(f"  opencode: build OK={ok}, mensajes={len(exp['messages'])}")
     print("selftest completado")
 
