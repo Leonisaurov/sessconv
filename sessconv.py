@@ -532,7 +532,6 @@ def write_qoder(sess, cwd, out_path=None, dry_run=False):
     target_cwd = cwd or sess["cwd"] or os.getcwd()
     if out_path is None:
         d = os.path.join(QODER_ROOT, slug_qoder(target_cwd))
-        os.makedirs(d, exist_ok=True)
         out_path = os.path.join(d, sid + ".jsonl")
     if os.path.exists(out_path):
         sys.exit(f"error: el destino ya existe: {out_path} (no se sobreescribe)")
@@ -629,6 +628,7 @@ def write_qoder(sess, cwd, out_path=None, dry_run=False):
     if dry_run:
         sys.stdout.write(text)
         return text, sid
+    os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(text)
     return out_path, sid
@@ -643,7 +643,6 @@ def write_codebuddy(sess, cwd, out_path=None, dry_run=False):
     target_cwd = cwd or sess["cwd"] or os.getcwd()
     if out_path is None:
         d = os.path.join(CODEBUDDY_ROOT, slug_codebuddy(target_cwd))
-        os.makedirs(d, exist_ok=True)
         out_path = os.path.join(d, sid + ".jsonl")
     if os.path.exists(out_path):
         sys.exit(f"error: el destino ya existe: {out_path} (no se sobreescribe)")
@@ -714,6 +713,7 @@ def write_codebuddy(sess, cwd, out_path=None, dry_run=False):
     if dry_run:
         sys.stdout.write(text)
         return text, sid
+    os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(text)
     return out_path, sid
