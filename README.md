@@ -153,6 +153,8 @@ Probado sin llamar al modelo (2026-11-08, OpenCode v2.2.6):
 | CodeBuddy → Qoder (roundtrip) | 333/333 `parts` |
 | Qoder → OpenCode (import real) → Qoder | 467 mensajes, 626/626 `parts` |
 | OpenCode → CodeBuddy (archivo) → OpenCode (import real) | 626/626 `parts` |
+| Qoder: sesión convertida visible en `qoder --list-sessions` | OK |
+| CodeBuddy: sesión convertida visible en el selector `codebuddy -r` | OK |
 | `selftest` | OK en los tres formatos |
 
 Las sesiones de prueba se marcaron con `SESSCONV-TEST` y se eliminaron al
